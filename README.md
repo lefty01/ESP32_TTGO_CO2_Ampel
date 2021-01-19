@@ -78,3 +78,9 @@ $ firewall-cmd --zone=trusted --add-source=192.168.1.123
 ```
 
 I read that people also have similar issues (destination unreachable) when on different wifi networks (2.4GHz vs 4GHz) but at least here that is not a problem (esp on 2.4GHz and laptop on 5GHz)
+
+
+# Pictures
+
+![CO2 Ampel pre-heating](20210119_155820_HDR.jpg)
+![CO2 Ampel green](20210119_160150_HDR.jpg)
