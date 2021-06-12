@@ -22,7 +22,10 @@
 // firewall-cmd --zone=trusted --add-source=192.168.1.75
 
 
-#define VERSION "0.0.5"
+// TODO save mqttdeviceId in flash/eeprom
+// calibrate feature via ttgo board button
+
+#define VERSION "0.1.0"
 #define MQTTDEVICEID "co2_ampel1"
 #define OTA_HOSTNAME "co2_ampel1"
 
@@ -42,6 +45,9 @@ FASTLED_USING_NAMESPACE
 #include <PubSubClient.h>
 #include <SoftwareSerial.h>
 #include <MHZ.h>
+#include <Button2.h>
+#include <EEPROM.h>
+
 
 
 #include "ESP32_TTGO_CO2_Ampel.h"
@@ -61,7 +67,7 @@ FASTLED_USING_NAMESPACE
 #define MH_Z19_RX 15
 #define MH_Z19_TX 17
 const unsigned long MHZ19B_PREHEATING_TIME = 3 * 60 * 1000;
-const unsigned MHZ19B_PREHEATING_TIMEs = 3 * 60;
+const unsigned MHZ19B_PREHEATING_TIMEs = 3 * 60; // 3 minutes
 
 #define DATA_PIN       2 // to rgb-strip Din
 #define NUM_LEDS       8
@@ -126,71 +132,6 @@ void setupMqttTopic(const String &id)
 }
 
 
-void fillSolid(struct CRGB * leds, int start, int numToFill, const struct CRGB& color)
-{
-  if (numToFill > NUM_LEDS) numToFill = NUM_LEDS;
-  for (int i = start; i < (start + numToFill); ++i) {
-    leds[i] = color;
-  }
-}
-
-void ledShowStatus(int* data, int len)
-{
-  if (false == warnReached && data[0] > warnThreshold) {
-    warnReached = true;
-    //fillSolid(leds, 0, NUM_LEDS, CRGB::Black);
-    fillSolid(leds, 0, NUM_LEDS, CRGB::Yellow);
-    FastLED.show();
-  }
-  if (false == criticalReached && data[0] > criticalThreshold) {
-    criticalReached = true;
-    fillSolid(leds, 0, NUM_LEDS, CRGB::Red);
-    FastLED.show();
-  }
-
-  if (criticalReached && data[0] < criticalThreshold && data[0] > warnThreshold) {
-    criticalReached = false;
-    fillSolid(leds, 0, NUM_LEDS, CRGB::Yellow);
-    FastLED.show();
-  }
-  if (warnReached && data[0] < warnThreshold) {
-    warnReached = false;
-    criticalReached = false;
-    fillSolid(leds, 0, NUM_LEDS, CRGB::Green);
-    FastLED.show();
-  }
-}
-
-void ledSpin(unsigned sec) {
-  unsigned long t = millis();
-  unsigned long t2 = t;
-  while(1) {
-    for (unsigned n = 0; n < 8; ++n) {
-      leds[n] = CRGB::Blue;
-      leds[(n+1)%8] = CRGB::Blue;
-      leds[(n+2)%8] = CRGB::Blue;
-
-      leds[(n-1)%8] = CRGB::Blue;
-      leds[(n-1)%8] /= 2;
-      leds[(n-2)%8] = CRGB::Blue;
-      leds[(n-2)%8] /= 3;
-      leds[(n-3)%8] = CRGB::Blue;
-      leds[(n-3)%8] /= 4;
-
-      leds[(n-4)%8] = CRGB::Black;
-      FastLED.show();
-      delay(100);
-    }
-    if ((millis() - t) > (sec * 1000))
-      return;
-    if ((millis() - t2) > (5*1000)) {
-      t2 = millis();
-      DEBUG_PRINT(".");
-      tft.print(".");
-    }
-  }
-}
-
 
 
 void setup()
@@ -242,7 +183,7 @@ void setup()
 		     });
     ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
 			    unsigned int percent = progress / (total / 100);
-			    unsigned row = ((unsigned long)(percent * 8/100));
+			    unsigned dot = ((unsigned long)(percent * NUM_LEDS/100));
 
 			    if (progress < 1) tft.fillScreen(TFT_BLACK);
 			    tft.setTextColor(TFT_BLUE);
@@ -252,8 +193,9 @@ void setup()
 			    tft.fillRect(3, 60, 100, 30, TFT_BLACK);
 			    tft.setCursor(30, 60); // println without setcursor is ok!
 			    tft.println(percent);
-			    //tft.println(row);
-			    fillSolid(leds, 0, row, CRGB::White);
+			    //tft.println(dot);
+			    //fillSolid(leds, 0, dot, CRGB::White);
+			    leds[(NUM_LEDS - 1 - dot)] = CRGB::White;
 			    FastLED.show();
 			  });
     ArduinoOTA.onError([](ota_error_t error) {
@@ -316,11 +258,17 @@ void setup()
   tft.setCursor(5, 0);
   tft.println("ESP TTGO CO2 Ampel");
   tft.println("");
+  tft.setTextColor(TFT_RED);
+  tft.setTextFont(4);
+  tft.setTextDatum(TC_DATUM);
+
+  DEBUG_PRINT("Preheating");
   tft.println("Preheating "); // todo: progress bar
   tft.println("");
   drawVersion();
 
-  DEBUG_PRINT("Preheating");
+  tft.setTextColor(TFT_RED);
+  tft.setTextFont(4);
   ledSpin(MHZ19B_PREHEATING_TIMEs);
 
   // start green
@@ -328,6 +276,8 @@ void setup()
   FastLED.show();
 
   tft.fillScreen(TFT_BLACK);
+  tft.setTextColor(TFT_WHITE);
+  tft.setTextFont(2);
   tft.setCursor(5, 0);
   tft.println("ESP TTGO CO2 Ampel");
   drawVersion();
@@ -348,9 +298,9 @@ void loop()
   if ((millis() - sw_timer_clock) > (5 * EVERY_SECOND)) {
     sw_timer_clock = millis();
 
-    Serial.print("\n----- Time from start: ");
-    Serial.print(millis() / 1000);
-    Serial.println(" s");
+    DEBUG_PRINT("\n----- Time from start: ");
+    DEBUG_PRINT(millis() / 1000);
+    DEBUG_PRINTLN(" s");
 
     int rc = getCO2andTemp(data, 2);
     if (rc) {

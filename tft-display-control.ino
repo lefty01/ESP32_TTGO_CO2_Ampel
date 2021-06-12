@@ -3,8 +3,10 @@ void drawVersion()
 {
   tft.setTextColor(TFT_WHITE);
   tft.setTextFont(2);
-  tft.setCursor(120, 110);
-  tft.print("Version: "); tft.println(VERSION);
+  tft.setCursor(  0, 120);
+  tft.print(ipAddr);
+  tft.setCursor(120, 120);
+  tft.print("Version: "); tft.print(VERSION);
 }
 
 
@@ -12,16 +14,10 @@ void drawSensorData(int* data, int len)
 {
   //tft.setTextDatum(TC_DATUM);
 
-  tft.fillRect(0, 30, 240, 20, TFT_BLACK);
-  tft.setCursor(0, 40, 4); // posx, posy, font size=4
-
-  // tft.setTextColor(TFT_BLACK, TFT_BLACK);
-  // tft.print("ppm:  ");
-  // tft.println("");
-  // tft.print("temp: ");
+  tft.fillRect(0, 35, 240, 60, TFT_BLACK);
   // tft.println("");
 
-  tft.setCursor(0, 40, 4); // posx, posy, font size=4
+  tft.setCursor(0, 40, 4); // posX, posY, font size=4
   tft.setTextColor(TFT_GREEN, TFT_BLACK);
   tft.print("ppm:  ");
   tft.println(data[0]);

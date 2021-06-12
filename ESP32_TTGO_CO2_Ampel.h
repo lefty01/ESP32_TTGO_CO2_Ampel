@@ -2,8 +2,8 @@
 #define _ESP32_TTGO_CO2_AMPEL_H_
 
 
-#define DEBUG 1
-#define DEBUG_MQTT 1
+//#define DEBUG 1
+//#define DEBUG_MQTT 1
 #include "debug_print.h"
 #include "wifi_mqtt_creds.h"
 
