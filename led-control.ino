@@ -57,11 +57,10 @@ void ledSpin(const unsigned sec) {
       FastLED.show();
       delay(100);
     } // approx. 800 ms (NUM_LEDS * 100 ms delay)
-
     if ((millis() - t) > (sec * 1000))
       return;
 
-    if ((millis() - t2) > 2000) { // once a second
+    if ((millis() - t2) > 2000) { // once every two seconds
       t2 = millis();
       remaining_sec -= 2;
       DEBUG_PRINTLN(remaining_sec);
@@ -71,3 +70,4 @@ void ledSpin(const unsigned sec) {
     }
   }
 }
+

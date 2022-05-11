@@ -86,7 +86,7 @@ int mqttConnect(bool updateDisplay)
   }
   // Attempt to connect
   //mqttClient.setKeepAlive(0); // "fix" timeouts
-  if (mqttClient.connect(MQTTDEVICEID,
+  if (mqttClient.connect(MQTTDEVICEID.c_str(),
 			 mqtt_user, mqtt_pass, MQTT_TOPIC_STATE.c_str(), 1, 1, "OFFLINE")) {
     DEBUG_PRINTLN("connected");
     if (updateDisplay) {

@@ -1,7 +1,7 @@
 /*--------------------------------------------------
 
   The MIT License (MIT)
-  (c) 2021 andreas loeffler <al@exitzero.de>
+  (c) 2019,2020,2022 andreas loeffler <al@exitzero.de>
 
   --------------------------------------------------*/
 
@@ -25,9 +25,9 @@
 // TODO save mqttdeviceId in flash/eeprom
 // calibrate feature via ttgo board button
 
-#define VERSION "0.1.0"
-#define MQTTDEVICEID "co2_ampel1"
-#define OTA_HOSTNAME "co2_ampel1"
+#define VERSION "0.2.1"
+//#define MQTTDEVICEID "co2_ampel"
+#define OTA_HOSTNAME "co2_ampel"
 
 #include <Arduino.h>
 #include <ArduinoOTA.h>
@@ -45,12 +45,29 @@ FASTLED_USING_NAMESPACE
 #include <PubSubClient.h>
 #include <SoftwareSerial.h>
 #include <MHZ.h>
-#include <Button2.h>
 #include <EEPROM.h>
+#include <esp_now.h>
 
 
+//#include "NotoSansBold15.h"
+// The font names are arrays references, thus must NOT be in quotes ""
+//#define AA_FONT_SMALL NotoSansBold15
 
 #include "ESP32_TTGO_CO2_Ampel.h"
+
+#define SERVER_PORT 4088
+
+String  MQTTDEVICEID = "co2_ampel_";
+byte mac_addr[6];
+uint8_t broadcastAddress[] = {0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc};
+
+typedef struct message {
+    int temp;
+    int co2;
+} message_t;
+message_t txReadings;
+
+bool lastEspNowSentStatus = false;
 
 // todo: do we get this from tft.width() and tft.height()?
 #define TFT_WIDTH  240
@@ -77,6 +94,8 @@ const unsigned MHZ19B_PREHEATING_TIMEs = 3 * 60; // 3 minutes
 #define MAX_BRIGHTNESS  200 // for now
 #define MIN_BRIGHTNESS    2 // for now
 
+#define OTA_BUTTON       35
+
 #define EVERY_SECOND 1000
 #define EVERY_10_SECONDS 10 * EVERY_SECOND
 #define EVERY_MINUTE EVERY_SECOND * 60
@@ -85,6 +104,10 @@ unsigned long sw_timer_2s;
 unsigned long sw_timer_4s;
 unsigned long sw_timer_10ms;
 unsigned long sw_timer_clock;
+
+bool OTA_ENABLED = false;
+const char* ssid = "CO2_AMPEL1";
+const char* password = "m1u2r3c4s5";
 
 // This is an array of leds.  One item for each led in your strip.
 CRGB leds[NUM_LEDS];
@@ -113,7 +136,7 @@ int data[2];
 
 bool isWifiAvailable = false;
 bool isMqttAvailable = false;
-
+bool isTcpClient     = false;
 
 String MQTT_TOPIC_STATE      = "%CHIP_ID%/state";
 String MQTT_TOPIC_SETCONFIG  = "%CHIP_ID%/setconfig";
@@ -133,6 +156,15 @@ void setupMqttTopic(const String &id)
 
 
 
+// Callback when data is sent
+void data_sent(const uint8_t *mac_addr, esp_now_send_status_t status) {
+  Serial.print("\r\nLast Packet Send Status:\t");
+  Serial.println(status == ESP_NOW_SEND_SUCCESS ? "Delivery Success" : "Delivery Fail");
+
+  lastEspNowSentStatus = (status == 0) ? true : false;
+}
+
+
 
 void setup()
 {
@@ -140,20 +172,66 @@ void setup()
 
   DEBUG_PRINTLN("CO2 Sensor MHZ 19B");
 
+  pinMode(OTA_BUTTON, INPUT_PULLUP);
+
+
+  esp_efuse_mac_get_default(mac_addr);
+  MQTTDEVICEID += String(mac_addr[4], HEX);
+  MQTTDEVICEID += String(mac_addr[5], HEX);
+
+  setupMqttTopic(MQTTDEVICEID);
+
   co2Serial.begin(9600); //Init sensor MH-Z19(14)
+
+
+  // prepare rgb data pin
+  pinMode(DATA_PIN, OUTPUT);
+  digitalWrite(DATA_PIN, 0);
+
+  FastLED.addLeds<CHIPSET, DATA_PIN, COLOR_ORDER>(leds, NUM_LEDS).
+    setCorrection(TypicalSMD5050);
+  FastLED.setBrightness(BRIGHTNESS);
+
+  fillSolid(leds, 0, NUM_LEDS, CRGB::Black);
+  FastLED.show();
 
 
   tft.begin();
   tft.setRotation(3);
   tft.fillScreen(TFT_BLACK);
 
+  tft.println("wait for OTA mode...");
+  delay(5000);
+  tft.fillScreen(TFT_BLACK);
 
-  isWifiAvailable = setupWifi() ? false : true;
-  net.setCACert(server_crt_str);
-  net.setCertificate(client_crt_str);
-  net.setPrivateKey(client_key_str);
 
-  setupMqttTopic(MQTTDEVICEID);
+  if (LOW == digitalRead(OTA_BUTTON)) {
+    // enable AP/OTA mode only if powered up while a key pressed
+    WiFi.softAPdisconnect(true); // deconfigure and disable
+    WiFi.enableAP(false); // disable per default
+
+    tft.setTextFont(4);
+    tft.setTextDatum(TC_DATUM);
+    tft.println("entering OTA mode");
+
+    WiFi.enableAP(true);
+    if (WiFi.softAP(ssid, password)) {
+      DEBUG_PRINTLN("AP Ready");
+      tft.println("AP/OTA ready");
+      OTA_ENABLED = true;
+    }
+    else {
+      DEBUG_PRINTLN("Soft AP setup Failed!");
+      tft.setTextColor(TFT_RED);
+      tft.println("AP seup failed");
+    }
+  }
+  else {
+    isWifiAvailable = setupWifi() ? false : true;
+    net.setCACert(server_crt_str);
+    net.setCertificate(client_crt_str);
+    net.setPrivateKey(client_key_str);
+  }
 
   if (isWifiAvailable) {
     mqttClient.setServer(mqtt_host, mqtt_port);
@@ -164,67 +242,67 @@ void setup()
     tft.fillScreen(TFT_BLACK);
   }
 
-  if (isWifiAvailable) {
-    ArduinoOTA.setHostname(OTA_HOSTNAME);
-    ArduinoOTA.onStart([]() {
-			 String type;
-			 if (ArduinoOTA.getCommand() == U_FLASH) {
-			   type = "sketch";
-			 } else { // U_FS
-			   type = "filesystem";
-			 }
-			 // NOTE: if updating FS this would be the place to unmount FS using FS.end()
-			 DEBUG_PRINTLN("Start updating " + type);
-			 tft.fillScreen(TFT_BLACK);
-			 fillSolid(leds, 0, NUM_LEDS, CRGB::Blue);
-		       });
-    ArduinoOTA.onEnd([]() {
-		       DEBUG_PRINTLN("\nEnd");
+
+  ArduinoOTA.setHostname(OTA_HOSTNAME);
+  ArduinoOTA.onStart([]() {
+		       String type;
+		       if (ArduinoOTA.getCommand() == U_FLASH) {
+			 type = "sketch";
+		       } else { // U_FS
+			 type = "filesystem";
+		       }
+		       // NOTE: if updating FS this would be the place to unmount FS using FS.end()
+		       DEBUG_PRINTLN("Start updating " + type);
+		       tft.fillScreen(TFT_BLACK);
+		       fillSolid(leds, 0, NUM_LEDS, CRGB::Blue);
 		     });
-    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-			    unsigned int percent = progress / (total / 100);
-			    unsigned dot = ((unsigned long)(percent * NUM_LEDS/100));
+  ArduinoOTA.onEnd([]() {
+		     DEBUG_PRINTLN("\nEnd");
+		   });
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+			  unsigned int percent = progress / (total / 100);
+			  unsigned dot = ((unsigned long)(percent * NUM_LEDS/100));
 
-			    if (progress < 1) tft.fillScreen(TFT_BLACK);
-			    tft.setTextColor(TFT_BLUE);
-			    tft.setTextFont(4);
-			    tft.setCursor(20, 40);
-			    tft.println("OTA PROGRESS");
-			    tft.fillRect(3, 60, 100, 30, TFT_BLACK);
-			    tft.setCursor(30, 60); // println without setcursor is ok!
-			    tft.println(percent);
-			    //tft.println(dot);
-			    //fillSolid(leds, 0, dot, CRGB::White);
-			    leds[(NUM_LEDS - 1 - dot)] = CRGB::White;
-			    FastLED.show();
-			  });
-    ArduinoOTA.onError([](ota_error_t error) {
-			 tft.fillScreen(TFT_BLACK);
-			 tft.setTextColor(TFT_WHITE);
-			 tft.setTextFont(2);
-			 tft.println("***  OTA ERROR !!!");
-			 delay(1000);
+			  if (progress < 1) tft.fillScreen(TFT_BLACK);
+			  tft.setTextColor(TFT_BLUE);
+			  tft.setTextFont(4);
+			  tft.setCursor(20, 40);
+			  tft.println("OTA PROGRESS");
+			  tft.fillRect(3, 60, 100, 30, TFT_BLACK);
+			  tft.setCursor(30, 60); // println without setcursor is ok!
+			  tft.println(percent);
+			  //tft.println(dot);
+			  //fillSolid(leds, 0, dot, CRGB::White);
+			  leds[(NUM_LEDS - 1 - dot)] = CRGB::White;
+			  FastLED.show();
+			});
+  ArduinoOTA.onError([](ota_error_t error) {
+		       tft.fillScreen(TFT_BLACK);
+		       tft.setTextColor(TFT_WHITE);
+		       tft.setTextFont(2);
+		       tft.println("***  OTA ERROR !!!");
+		       delay(1000);
 
-			 if (error == OTA_AUTH_ERROR) {
-			   DEBUG_PRINTLN("Auth Failed");
-			   tft.println("***  AUTH !!!");
-			 } else if (error == OTA_BEGIN_ERROR) {
-			   DEBUG_PRINTLN("Begin Failed");
-			   tft.println("***  BEGIN failed !!!");
-			 } else if (error == OTA_CONNECT_ERROR) {
-			   DEBUG_PRINTLN("Connect Failed");
-			   tft.println("***  connect failed !!!");
-			 } else if (error == OTA_RECEIVE_ERROR) {
-			   DEBUG_PRINTLN("Receive Failed");
-			   tft.println("***  receive failed !!!");
-			 } else if (error == OTA_END_ERROR) {
-			   DEBUG_PRINTLN("End Failed");
-			   tft.println("***  END failed !!!");
-			 }
-			 delay(5000);
-		       });
-    ArduinoOTA.begin();
-  }
+		       if (error == OTA_AUTH_ERROR) {
+			 DEBUG_PRINTLN("Auth Failed");
+			 tft.println("***  AUTH !!!");
+		       } else if (error == OTA_BEGIN_ERROR) {
+			 DEBUG_PRINTLN("Begin Failed");
+			 tft.println("***  BEGIN failed !!!");
+		       } else if (error == OTA_CONNECT_ERROR) {
+			 DEBUG_PRINTLN("Connect Failed");
+			 tft.println("***  connect failed !!!");
+		       } else if (error == OTA_RECEIVE_ERROR) {
+			 DEBUG_PRINTLN("Receive Failed");
+			 tft.println("***  receive failed !!!");
+		       } else if (error == OTA_END_ERROR) {
+			 DEBUG_PRINTLN("End Failed");
+			 tft.println("***  END failed !!!");
+		       }
+		       delay(5000);
+		     });
+  ArduinoOTA.begin();
+//}
 
   isMqttAvailable = mqttClient.publish(MQTT_TOPIC_STATE.c_str(),
 				       "ESP32 TTGO CO2 Ampel Starting", true);
@@ -242,17 +320,31 @@ void setup()
   // TODO: check if adc enable cause the issue with pullup???
   // setup globals
 
-  // prepare rgb data pin
-  pinMode(DATA_PIN, OUTPUT);
-  digitalWrite(DATA_PIN, 0);
+
+  if (true == OTA_ENABLED) return;
+
+  // if we do not have an accespoint connection init esp_now network
+  // transmit data to mac address of our office esp
+  if ((! isWifiAvailable) && (! OTA_ENABLED)) {
+    WiFi.mode(WIFI_STA);
+    tft.println("init esp_now");
+    if (esp_now_init() != ESP_OK) {
+      DEBUG_PRINTLN("Error initializing ESP-NOW");
+      return;
+    }
+    esp_now_register_send_cb(data_sent);
+
+    esp_now_peer_info_t peerInfo;
+    memcpy(peerInfo.peer_addr, broadcastAddress, 6);
+    peerInfo.channel = 0;
+    peerInfo.encrypt = false;
+    if (esp_now_add_peer(&peerInfo) != ESP_OK){
+      DEBUG_PRINTLN("Failed to add peer");
+      return;
+    }
+  }
 
 
-  FastLED.addLeds<CHIPSET, DATA_PIN, COLOR_ORDER>(leds, NUM_LEDS).
-    setCorrection(TypicalSMD5050);
-  FastLED.setBrightness(BRIGHTNESS);
-
-  fillSolid(leds, 0, NUM_LEDS, CRGB::Black);
-  FastLED.show();
 
   tft.fillScreen(TFT_BLACK);
   tft.setCursor(5, 0);
@@ -288,7 +380,8 @@ void setup()
 void loop()
 {
 
-  if (isWifiAvailable) ArduinoOTA.handle();
+  if (isWifiAvailable || (true == OTA_ENABLED))
+    ArduinoOTA.handle();
 
   if (isWifiAvailable && (false == (isMqttAvailable = mqttClient.loop()))) {
     DEBUG_PRINTLN("mqtt connection lost ... try re-connect");
@@ -298,11 +391,13 @@ void loop()
   if ((millis() - sw_timer_clock) > (5 * EVERY_SECOND)) {
     sw_timer_clock = millis();
 
-    DEBUG_PRINT("\n----- Time from start: ");
-    DEBUG_PRINT(millis() / 1000);
-    DEBUG_PRINTLN(" s");
+    Serial.print("\n----- Time from start: ");
+    Serial.print(millis() / 1000);
+    Serial.println(" s");
 
     int rc = getCO2andTemp(data, 2);
+    txReadings.co2  = data[0];
+    txReadings.temp = data[1];
     if (rc) {
       DEBUG_PRINT("ERROR getting sensor data: rc=");
       DEBUG_PRINTLN(rc);
@@ -313,13 +408,22 @@ void loop()
     DEBUG_PRINT("Temperature: ");
     DEBUG_PRINTLN(data[1]);
 
-    drawSensorData(data, 2);
-
     ledShowStatus(data, 2);
+
+    drawSensorData(data, 2);
 
     String co2ppm(data[0]);
     String tempC(data[1]);
     isMqttAvailable = mqttClient.publish(MQTT_TOPIC_CO2PPM.c_str(), co2ppm.c_str(), true);
     isMqttAvailable = mqttClient.publish(MQTT_TOPIC_TEMP.c_str(), tempC.c_str(), true);
+
+    esp_err_t result = esp_now_send(broadcastAddress, (uint8_t *)&txReadings, sizeof(txReadings));
+    if (result == ESP_OK) {
+      DEBUG_PRINTLN("Sent with success");
+    }
+    else {
+      DEBUG_PRINTLN("Error sending the data");
+    }
+
   }
 }

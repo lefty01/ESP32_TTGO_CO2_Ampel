@@ -4,6 +4,7 @@
 
 //#define DEBUG 1
 //#define DEBUG_MQTT 1
+#define MQTT_USE_SSL 1
 #include "debug_print.h"
 #include "wifi_mqtt_creds.h"
 

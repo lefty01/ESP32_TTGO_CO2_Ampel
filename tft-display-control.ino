@@ -13,14 +13,28 @@ void drawVersion()
 void drawSensorData(int* data, int len)
 {
   //tft.setTextDatum(TC_DATUM);
+  //  tft.setTextDatum(MC_DATUM);
 
-  tft.fillRect(0, 35, 240, 60, TFT_BLACK);
+  tft.fillRect(0, 35, 240, 65, TFT_BLACK);
   // tft.println("");
 
   tft.setCursor(0, 40, 4); // posX, posY, font size=4
-  tft.setTextColor(TFT_GREEN, TFT_BLACK);
   tft.print("ppm:  ");
+
+  if (criticalReached) {
+    tft.setTextColor(TFT_RED, TFT_BLACK);
+  }
+  else if (warnReached) {
+    tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+  }
+  else
+    tft.setTextColor(TFT_GREEN, TFT_BLACK);
+
+  tft.setTextFont(6);
   tft.println(data[0]);
+
+  tft.setTextColor(TFT_GREEN, TFT_BLACK);
+  tft.setTextFont(4);
   tft.print("temp: ");
   tft.println(data[1]);
 }
